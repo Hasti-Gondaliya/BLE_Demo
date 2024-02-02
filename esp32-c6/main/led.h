@@ -10,7 +10,10 @@
 
 #include "led_strip.h"
 
+#define CUSTOM_SERVICE_UUID 0x1234 // Custom Service
+#define CUSTOM_LED_CHAR_UUID 0x5678 // Custom LED Characteristic
+
 void configure_led(void);
-void blink_led();
+void blink_led(uint8_t set_led_status);
 
 #endif /* MAIN_LED_H_ */

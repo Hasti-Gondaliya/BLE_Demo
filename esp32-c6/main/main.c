@@ -19,25 +19,48 @@
 #include "temp.h"
 #include "gatt_svr.h"
 
+#define TAG "BLE_PRPHRL"
+#define DEVICE_NAME Nimble_ble_PRPHL
 /* BLE Variables */
 static uint16_t conn_handle;
-static uint8_t ble_temp_prph_addr_type;
-static const char *tag = "Nimble_ble_PRPH";
-static const char *device_name = "Nimble_ble_PRPH";
+static const char *DEVICE_NAME = "Nimble_ble_PRPH";
 
-/* Prototypes */
+extern uint16_t temp_handle; // Characteristic handle
+static uint16_t conn_handle; // Connection handle
+static bool device_connected = false; // Connection status
+static uint8_t notify_enabled = 0; // Notification status
+
 static int ble_prphl_gap_event(struct ble_gap_event *event, void *arg);
 
-void print_addr(const void *addr)
+static void notify_temperature()
 {
-    const uint8_t *u8p;
+	if (device_connected)
+	{
+		int rc;
+		float temp_value = read_temperature();
+		uint8_t temp = (uint8_t)temp_value;
+		ESP_LOGI(TAG, "=------>Reading %d\n", temp);
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(&temp, sizeof(temp)); // Create an mbuf for the characteristic value
 
-    u8p = addr;
-    MODLOG_DFLT(INFO, "%02x:%02x:%02x:%02x:%02x:%02x",
-                u8p[5], u8p[4], u8p[3], u8p[2], u8p[1], u8p[0]);
+		if (notify_enabled == 1)
+		{
+			// Send notification
+			rc = ble_gattc_notify_custom(conn_handle, temp_handle, om);
+			assert(rc == 0);
+		}
+		else if (notify_enabled == 2)
+		{
+			// Send indication
+			rc = ble_gattc_indicate_custom(conn_handle, temp_handle, om);
+			assert(rc == 0);
+		}
+		ESP_LOGI(TAG, "Temperature: %d C", temp); // Print temperature to console
+
+		vTaskDelay(5000 / portTICK_PERIOD_MS);     // Wait 5 seconds
+	}
 }
 
-static void ble_prphl_advertise(void)
+static int ble_prphl_advertise()
 {
 	int rc;
     struct ble_gap_adv_params adv_params;
@@ -67,12 +90,12 @@ static void ble_prphl_advertise(void)
     fields.tx_pwr_lvl_is_present = 1;
     fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
 
-    fields.name = (uint8_t *)device_name;
-    fields.name_len = strlen(device_name);
+    fields.name = (uint8_t *)DEVICE_NAME;
+    fields.name_len = strlen(DEVICE_NAME);
     fields.name_is_complete = 1;
 
     fields.uuids16 = (ble_uuid16_t[]) {
-        BLE_UUID16_INIT(BLE_UUID_ENVIRONMENTAL_SENSING_SERVICE)
+        BLE_UUID16_INIT(BLE_SERVICE_UUID)
     };
     fields.num_uuids16 = 1;
     fields.uuids16_is_complete = 1;
@@ -80,84 +103,114 @@ static void ble_prphl_advertise(void)
     rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
         MODLOG_DFLT(ERROR, "error setting advertisement data; rc=%d\n", rc);
-        return;
+        return rc;
     }
 
     /* Begin advertising */
     memset(&adv_params, 0, sizeof(adv_params));
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    rc = ble_gap_adv_start(ble_temp_prph_addr_type, NULL, BLE_HS_FOREVER,
+    rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER,
                            &adv_params, ble_prphl_gap_event, NULL);
     if (rc != 0) {
         MODLOG_DFLT(ERROR, "error enabling advertisement; rc=%d\n", rc);
-        return;
+        return rc;
     }
+    return 0;
 }
 
 static int ble_prphl_gap_event(struct ble_gap_event *event, void *arg)
 {
-    switch (event->type) {
-    case BLE_GAP_EVENT_CONNECT:
-        /* A new connection was established or a connection attempt failed */
-        MODLOG_DFLT(INFO, "connection %s; status=%d\n",
-                    event->connect.status == 0 ? "established" : "failed",
-                    event->connect.status);
+	switch (event->type)
+	{
+	case BLE_GAP_EVENT_CONNECT:
+		// A new connection was established or a connection attempt failed
+		ESP_LOGI(TAG, "connection %s; status=%d ",
+				 event->connect.status == 0 ? "established" : "failed",
+				 event->connect.status);
+		if (event->connect.status == 0)
+		{
+			conn_handle = event->connect.conn_handle;
+			device_connected = true;
+		}
+		break;
 
-        if (event->connect.status != 0) {
-		   /* Connection failed; resume advertising */
-        	/* resume advertising */
-        	ble_prphl_advertise();
-        }
-        conn_handle = event->connect.conn_handle;
-        break;
+	case BLE_GAP_EVENT_DISCONNECT:
+		// Connection terminated
+		ESP_LOGI(TAG, "disconnect; reason=%d ", event->disconnect.reason);
+		conn_handle = BLE_HS_CONN_HANDLE_NONE;
+		device_connected = false;
+		notify_enabled = 0;
+		// Restart advertising
+		ble_prphl_advertise();
+		break;
 
-    case BLE_GAP_EVENT_DISCONNECT:
-        MODLOG_DFLT(INFO, "disconnect; reason=%d\n", event->disconnect.reason);
+	case BLE_GAP_EVENT_ADV_COMPLETE:
+		// Advertising terminated
+		ESP_LOGI(TAG, "adv complete; reason=%d ", event->adv_complete.reason);
+		// Restart advertising
+		ble_prphl_advertise();
+		break;
 
-        /* Connection terminated; resume advertising */
-        ble_prphl_advertise();
-        break;
+	case BLE_GAP_EVENT_SUBSCRIBE:
+		// GATT subscribe event
+		ESP_LOGI(TAG, "subscribe event; conn_handle=%d attr_handle=%d "
+					  "reason=%d prevn=%d curn=%d previ=%d curi=%d",
+				 event->subscribe.conn_handle,
+				 event->subscribe.attr_handle,
+				 event->subscribe.reason,
+				 event->subscribe.prev_notify,
+				 event->subscribe.cur_notify,
+				 event->subscribe.prev_indicate,
+				 event->subscribe.cur_indicate);
+		if (event->subscribe.attr_handle == temp_handle)
+		{
+			if (event->subscribe.cur_notify)
+			{
+				ESP_LOGI(TAG, "---> Notify enable");
+				notify_enabled = 1;
+				notify_temperature();
+			}
+			else if (event->subscribe.cur_indicate)
+			{
+				ESP_LOGI(TAG, "-----> Indicate enable");
+				notify_enabled = 2;
+			}
+			else
+			{
+				ESP_LOGI(TAG, "----> Notify/indicate disable");
+				notify_enabled = 0;
+			}
+		}
+		break;
 
-    case BLE_GAP_EVENT_ADV_COMPLETE:
-        MODLOG_DFLT(INFO, "adv complete\n");
-        ble_prphl_advertise();
-        break;
+	case BLE_GAP_EVENT_NOTIFY_TX:
+		// GATT notification/indication event
+		ESP_LOGI(TAG, "notify event; conn_handle=%d attr_handle=%d "
+					  "status=%d indication=%d",
+				 event->notify_tx.conn_handle,
+				 event->notify_tx.attr_handle,
+				 event->notify_tx.status,
+				 event->notify_tx.indication);
+		break;
 
-    case BLE_GAP_EVENT_SUBSCRIBE:
-        MODLOG_DFLT(INFO, "subscribe event; cur_notify=%d\n value handle; "
-                    "val_handle=%d\n",
-                    event->subscribe.cur_notify, event->subscribe.attr_handle);
-        break;
-
-    case BLE_GAP_EVENT_MTU:
-        MODLOG_DFLT(INFO, "mtu update event; conn_handle=%d mtu=%d\n",
-                    event->mtu.conn_handle,
-                    event->mtu.value);
-        break;
-
-    }
-
-    return 0;
+	default:
+		break;
+	}
+	return 0;
 }
 
 static void ble_prphl_on_sync(void)
 {
     int rc;
 
-    rc = ble_hs_id_infer_auto(0, &ble_temp_prph_addr_type);
-    assert(rc == 0);
-
-    uint8_t addr_val[6] = {0};
-    rc = ble_hs_id_copy_addr(ble_temp_prph_addr_type, addr_val, NULL);
-
-    MODLOG_DFLT(INFO, "Device Address: ");
-    print_addr(addr_val);
-    MODLOG_DFLT(INFO, "\n");
+    // Set device name
+	rc = ble_svc_gap_device_name_set(DEVICE_NAME);
+	assert(rc == 0);
 
     /* Begin advertising */
-    ble_prphl_advertise();
-#
+    rc = ble_prphl_advertise();
+    assert(rc == 0);
 }
 
 static void ble_prphl_on_reset(int reason)
@@ -167,7 +220,7 @@ static void ble_prphl_on_reset(int reason)
 
 void ble_temp_prph_host_task(void *param)
 {
-    ESP_LOGI(tag, "BLE Host Task Started");
+    ESP_LOGI(TAG, "BLE Host Task Started");
     /* This function will return only when nimble_port_stop() is executed */
     nimble_port_run();
 
@@ -196,6 +249,7 @@ void app_main(void)
 	 /* Initialize the NimBLE host configuration */
 	ble_hs_cfg.sync_cb = ble_prphl_on_sync;
 	ble_hs_cfg.reset_cb = ble_prphl_on_reset;
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
 	/* Configure the peripheral according to the LED type */
 	configure_led();
@@ -204,12 +258,21 @@ void app_main(void)
 	assert(rc == 0);
 
 	/* Set the default device name */
-	rc = ble_svc_gap_device_name_set(device_name);
-	assert(rc == 0);
-
 	rc = temp_sensor_init();
 	assert(rc == 0);
 
-    nimble_port_freertos_init(ble_temp_prph_host_task);
 
+	nimble_port_freertos_init(ble_temp_prph_host_task);
+
+//	while(1)
+//	{
+////		if (device_connected)
+////		{
+////			float temp = read_temperature(); // Read temperature in Celsius
+////			char temp_str[10];              // Buffer to store temperature as string
+////			sprintf(temp_str, "%.2f", temp);
+////			ESP_LOGI(TAG, "---> Temperature read %s\n", temp_str);
+////            vTaskDelay(5000 / portTICK_PERIOD_MS);     // Wait 5 seconds
+////		}
+//	}
 }

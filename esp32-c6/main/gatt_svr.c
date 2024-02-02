@@ -18,63 +18,56 @@
 #include "led.h"
 #include "gatt_svr.h"
 
-static const char *tag = "Nimble_ble_PRPH-gatt-svr";
-
-static const ble_uuid128_t gatt_svr_svc_uuid =
-    BLE_UUID128_INIT(0x2d, 0x71, 0xa2, 0x59, 0xb4, 0x58, 0xc8, 0x12,
-                     0x99, 0x99, 0x43, 0x95, 0x12, 0x2f, 0x46, 0x59);
+#define TAG "Nimble_ble_PRPH-gatt-svr"
 
 /* A characteristic that can be subscribed to */
+uint16_t temp_handle;
+uint16_t led_handle;
 static uint8_t gatt_svr_chr_val;
-static uint16_t gatt_svr_chr_val_handle;
-static const ble_uuid128_t gatt_svr_chr_uuid =
-    BLE_UUID128_INIT(0x00, 0x00, 0x00, 0x00, 0x11, 0x11, 0x11, 0x11,
-                     0x22, 0x22, 0x22, 0x22, 0x33, 0x33, 0x33, 0x33);
+static uint8_t notify_enabled = 0; // Notification status
 
-
-/* A characteristic that can be subscribed to */
-static uint16_t gatt_svr_chr_temp_val_handle;
+extern uint8_t led_status;
 
 static int gatt_svr_chr_access(uint16_t conn_handle, uint16_t attr_handle,
                                struct ble_gatt_access_ctxt *ctxt, void *arg);
 
 static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
-    {
+	{
 		/* Service: environmental sensing */
 		.type = BLE_GATT_SVC_TYPE_PRIMARY,
-		.uuid = BLE_UUID16_DECLARE(BLE_UUID_ENVIRONMENTAL_SENSING_SERVICE),
+		.uuid = BLE_UUID16_DECLARE(BLE_SERVICE_UUID),
 		.characteristics = (struct ble_gatt_chr_def[])
 		{ {
 				/* Characteristic: Heart-rate measurement */
-				.uuid = BLE_UUID16_DECLARE(BLE_UUID_TEMPERATURE_CHAR),
+				.uuid = BLE_UUID16_DECLARE(BLE_TEMP_CHAR_UUID),
 				.access_cb = gatt_svr_chr_access,
 				.flags = BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_READ,
-				.val_handle = &gatt_svr_chr_temp_val_handle,
+				.val_handle = &temp_handle,
 			}, {
 					0, /* No more characteristics in this service */
 			},
-    	}
-    },
+		}
+	},
 
 	{
 		/* Service: Custom service to write char */
 		.type = BLE_GATT_SVC_TYPE_PRIMARY,
-		.uuid = &gatt_svr_svc_uuid.u,
+		.uuid = BLE_UUID16_DECLARE(CUSTOM_SERVICE_UUID),
 		.characteristics = (struct ble_gatt_chr_def[])
 		{ {
 				/*** This characteristic can be subscribed to by writing 0x00 and 0x01 to the CCCD ***/
-				.uuid = &gatt_svr_chr_uuid.u,
+				.uuid = BLE_UUID16_DECLARE(CUSTOM_LED_CHAR_UUID),
 				.access_cb = gatt_svr_chr_access,
 				.flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_INDICATE,
-				.val_handle = &gatt_svr_chr_val_handle,
+				.val_handle = &led_handle,
 			}, {
 					0, /* No more descriptors in this characteristic */
 			},
 		},
 	},
-    {
-        0, /* No more services. */
-    },
+	{
+		0, /* No more services. */
+	},
 };
 
 static int gatt_svr_write(struct os_mbuf *om, uint16_t min_len, uint16_t max_len,
@@ -100,63 +93,84 @@ static int gatt_svr_chr_access(uint16_t conn_handle, uint16_t attr_handle,
                                struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
 	int rc;
-    float tsens_value;
-	struct os_mbuf *om;
-	static uint8_t gatt_svr_chr_temp_val;
+//	char temp_str[2];
 
-	switch (ctxt->op) {
-	case BLE_GATT_ACCESS_OP_READ_CHR:
+	ESP_LOGI(TAG, "GATT access event; conn_handle=%d attr_handle=%d "
+				  "op=%d",
+			 conn_handle, attr_handle, ctxt->op);
 
-		ESP_LOGI(tag, "Characteristic read; conn_handle=%d attr_handle=%d",
-				                        conn_handle, attr_handle);
-
-		if (attr_handle == gatt_svr_chr_temp_val_handle) {
-			temperature_sensor_enable(temp_sensor);
-			ESP_ERROR_CHECK(temperature_sensor_get_celsius(temp_sensor, &tsens_value));
-
-			gatt_svr_chr_temp_val = (uint8_t)tsens_value;
-			rc = os_mbuf_append(ctxt->om, &gatt_svr_chr_temp_val, sizeof(gatt_svr_chr_temp_val));
-			om = ble_hs_mbuf_from_flat(&gatt_svr_chr_temp_val, sizeof(gatt_svr_chr_temp_val));
-			rc = ble_gatts_notify_custom(conn_handle, gatt_svr_chr_temp_val_handle, om);
-
-			temperature_sensor_disable(temp_sensor);
+	if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR)
+	{
+		// Read characteristic value
+		if(attr_handle == temp_handle)
+		{
+			float temp_value = read_temperature();
+			uint8_t temp = (uint8_t)temp_value;
+			rc = os_mbuf_append(ctxt->om, &temp, sizeof(temp));
 			return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
 		}
-		if(attr_handle == gatt_svr_chr_val_handle) {
+		if(attr_handle == led_handle) {
 			rc = os_mbuf_append(ctxt->om,
-								&gatt_svr_chr_val,
-								sizeof(gatt_svr_chr_val));
+								&led_status,
+								sizeof(led_status));
 			return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
 		}
-
-		goto unknown;
-
-	case BLE_GATT_ACCESS_OP_WRITE_CHR:
-
-		ESP_LOGI(tag, "Characteristic write; conn_handle=%d attr_handle=%d",
-		                        conn_handle, attr_handle);
-
-		if (attr_handle == gatt_svr_chr_val_handle) {
+	}
+	else if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR)
+	{
+		// Write characteristic value
+		ESP_LOGI(TAG, "Write event; data_len=%d data=", ctxt->om->om_len);
+		esp_log_buffer_hex(TAG, ctxt->om->om_data, ctxt->om->om_len);
+		if(attr_handle == led_handle)
+		{
 			rc = gatt_svr_write(ctxt->om,
 								sizeof(gatt_svr_chr_val),
 								sizeof(gatt_svr_chr_val),
 								&gatt_svr_chr_val, NULL);
-
 			ble_gatts_chr_updated(attr_handle);
-			ESP_LOGI(tag, "Notification/Indication scheduled for "
+			blink_led(gatt_svr_chr_val);
+			ESP_LOGI(TAG, "Notification/Indication scheduled for "
 						"all subscribed peers.\n");
-			return rc;
 		}
-		goto unknown;
-	default:
-		goto unknown;
+		return 0;
 	}
-
-unknown:
-	/* Unknown characteristic/descriptor;
-	 * The NimBLE host should not have called this function;
-	 */
-	assert(0);
+	else if (ctxt->op == BLE_GATT_ACCESS_OP_READ_DSC)
+	{
+		// Read descriptor value
+		uint16_t desc_val = htole16(notify_enabled);
+		rc = os_mbuf_append(ctxt->om, &desc_val, sizeof(desc_val));
+		return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+	}
+	else if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_DSC)
+	{
+		// Write descriptor value
+		uint16_t desc_val;
+		if (ctxt->om->om_len != 2)
+		{
+			return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+		}
+		desc_val = le16toh(ctxt->om->om_data);
+		if (desc_val == 0x0001)
+		{
+			ESP_LOGI(TAG, "Notify enable");
+			notify_enabled = 1;
+		}
+		else if (desc_val == 0x0002)
+		{
+			ESP_LOGI(TAG, "Indicate enable");
+			notify_enabled = 2;
+		}
+		else if (desc_val == 0x0000)
+		{
+			ESP_LOGI(TAG, "Notify/indicate disable");
+			notify_enabled = 0;
+		}
+		else
+		{
+			return BLE_ATT_ERR_UNLIKELY;
+		}
+		return 0;
+	}
 	return BLE_ATT_ERR_UNLIKELY;
 }
 
