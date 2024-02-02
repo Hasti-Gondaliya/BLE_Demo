@@ -11,14 +11,15 @@
 #include "led.h"
 #include "esp_log.h"
 
+#define TAG "Nimble_ble_PRPH-led"
 #define BLINK_GPIO CONFIG_BLINK_GPIO
 
 static led_strip_handle_t led_strip;
-static const char *tag = "Nimble_ble_PRPH-led";
+uint8_t led_status = 0;
 
 void configure_led(void)
 {
-    ESP_LOGI(tag, "Example configured to blink addressable LED!");
+    ESP_LOGI(TAG, "Example configured to blink addressable LED!\n");
     /* LED strip initialization with the GPIO and pixels number*/
     led_strip_config_t strip_config = {
         .strip_gpio_num = BLINK_GPIO,
@@ -32,24 +33,24 @@ void configure_led(void)
     led_strip_clear(led_strip);
 }
 
-void blink_led()
+void blink_led(uint8_t set_led_status)
 {
-	while(1)
+	if(set_led_status)
 	{
+	    ESP_LOGI(TAG, "Turning On LED!\n");
+
 		led_strip_set_pixel(led_strip, 0, 16, 16, 16);
 		/* Refresh the strip to send data */
 		led_strip_refresh(led_strip);
-	}
-    /* If the addressable LED is enabled */
-//    if (s_led_state) {
-//        /* Set the LED pixel using RGB from 0 (0%) to 255 (100%) for each color */
-//        led_strip_set_pixel(led_strip, 0, 16, 16, 16);
-//        /* Refresh the strip to send data */
-//        led_strip_refresh(led_strip);
-//    } else {
-//        /* Set all LED off to clear all pixels */
-//        led_strip_clear(led_strip);
-//    }
+		led_status = 1;
+	}else
+	{
+	    ESP_LOGI(TAG, "Turning Off LED!\n");
+
+        /* Set all LED off to clear all pixels */
+        led_strip_clear(led_strip);
+        led_status = 0;
+    }
 }
 
 #endif /* MAIN_LED_C_ */

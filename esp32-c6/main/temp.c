@@ -9,10 +9,10 @@
 #include "os/endian.h"
 #include "temp.h"
 
+#define TAG "Nimble_ble_PRPH-temp"
 temperature_sensor_handle_t temp_sensor = NULL;
 
-static const char *tag = "Nimble_ble_PRPH-temp";
-
+float read_temp = 0;
 
 static bool temp_sensor_monitor_cbs(temperature_sensor_handle_t tsens, const temperature_sensor_threshold_event_data_t *edata, void *user_data)
 {
@@ -22,7 +22,7 @@ static bool temp_sensor_monitor_cbs(temperature_sensor_handle_t tsens, const tem
 
 int temp_sensor_init()
 {
-	ESP_LOGI(tag, "Install temperature sensor, expected temp ranger range: 10~50 ℃");
+	ESP_LOGI(TAG, "Install temperature sensor, expected temp ranger range: 10~50 ℃");
 	temperature_sensor_config_t temp_sensor_config = TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 50);
 	ESP_ERROR_CHECK(temperature_sensor_install(&temp_sensor_config, &temp_sensor));
 
@@ -39,18 +39,28 @@ int temp_sensor_init()
 
 	ESP_ERROR_CHECK(temperature_sensor_register_callbacks(temp_sensor, &cbs, NULL));
 
-	ESP_LOGI(tag, "Enable temperature sensor");
+	ESP_LOGI(TAG, "Enable temperature sensor");
 	ESP_ERROR_CHECK(temperature_sensor_enable(temp_sensor));
 
-	ESP_LOGI(tag, "Read temperature");
-	int cnt = 10;
-	float tsens_value;
+	ESP_LOGI(TAG, "Read temperature");
+	int cnt = 3;
+	float read_temp;
 
 	while (cnt--) {
-		ESP_ERROR_CHECK(temperature_sensor_get_celsius(temp_sensor, &tsens_value));
-		ESP_LOGI(tag, "Temperature value %.02f ℃", tsens_value);
+		ESP_ERROR_CHECK(temperature_sensor_get_celsius(temp_sensor, &read_temp));
+		ESP_LOGI(TAG, "Temperature value %.02f ℃", read_temp);
 		vTaskDelay(pdMS_TO_TICKS(1000));
 	}
+	temperature_sensor_disable(temp_sensor);
 	return 0;
+}
+
+float read_temperature()
+{
+	ESP_ERROR_CHECK(temperature_sensor_enable(temp_sensor));
+	ESP_ERROR_CHECK(temperature_sensor_get_celsius(temp_sensor, &read_temp));
+	ESP_LOGI(TAG, "Temperature value %.02f celsius", read_temp);
+	temperature_sensor_disable(temp_sensor);
+	return read_temp;
 }
 
