@@ -28,53 +28,64 @@
 
 #define HRS_QUEUE_SIZE 16
 
-/** @brief Custom LED Service UUID. */
-#define BT_UUID_CUS_VAL BT_UUID_128_ENCODE(0x59462f12, 0x9543, 0x9999, 0x12c8, 0x58b459a2712d)
 
-/** @brief LED Characteristic UUID. */
-#define BT_UUID_CUS_LED_VAL BT_UUID_128_ENCODE(0x33333333, 0x2222, 0x2222, 0x1111, 0x111100000000)
+#define CUSTOM_SERVICE_UUID_VAL 0x1234 // Custom Service
+#define CUSTOM_LED_CHAR_UUID_VAL 0x5678 // Custom LED Characteristic
 
-#define BT_UUID_CUS BT_UUID_DECLARE_128(BT_UUID_CUS_VAL)
-#define BT_UUID_CUS_LED BT_UUID_DECLARE_128(BT_UUID_CUS_LED_VAL)
+#define CUSTOM_SERVICE_UUID \
+	BT_UUID_DECLARE_16(CUSTOM_SERVICE_UUID_VAL)
 
+#define CUSTOM_LED_CHAR_UUID \
+	BT_UUID_DECLARE_16(CUSTOM_LED_CHAR_UUID_VAL)
+	
 static struct bt_conn *central_conn;
-static struct bt_uuid_16 discover_uuid = BT_UUID_INIT_16(0);
-static struct bt_uuid_128 discover_uuid1 = BT_UUID_INIT_128(0);
+static struct bt_uuid_16 discover_uuid[2] = {BT_UUID_INIT_16(0)};
 static struct bt_uuid_16 read_uuid = BT_UUID_INIT_16(0);
-static struct bt_uuid_128 read_uuid1 = BT_UUID_INIT_128(0);
 static struct bt_gatt_discover_params discover_params[2];
 static struct bt_gatt_subscribe_params subscribe_params[2];
 static struct bt_gatt_read_params read_params;
 static struct bt_gatt_write_params write_params;
 
-static void read();
 static void led_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value);
+static void ess_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value);
 
 static void read_temp(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
 			       uint16_t len, uint16_t offset);
-static void write_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
+static void write_led(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
 			 		uint16_t len, uint16_t offset, uint8_t flags);
-static void read_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+static void read_led(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
 			       uint16_t len, uint16_t offset);
 
-static uint8_t read_data;
-static uint8_t notify_data;
+static uint8_t temp_val;
+static uint8_t led_status;
 
 BT_GATT_SERVICE_DEFINE(my_ess_svc, 
         BT_GATT_PRIMARY_SERVICE(BT_UUID_ESS),
         BT_GATT_CHARACTERISTIC(BT_UUID_TEMPERATURE, 
                     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-                    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, read_temp, NULL, &read_data),
-		BT_GATT_CCC(led_ccc_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+                    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, read_temp, NULL, &temp_val),
+		BT_GATT_CCC(ess_ccc_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
 
 BT_GATT_SERVICE_DEFINE(my_custom_led_svc, 
-        BT_GATT_PRIMARY_SERVICE(BT_UUID_CUS),
-        BT_GATT_CHARACTERISTIC(BT_UUID_CUS_LED, 
+        BT_GATT_PRIMARY_SERVICE(CUSTOM_SERVICE_UUID),
+        BT_GATT_CHARACTERISTIC(CUSTOM_LED_CHAR_UUID, 
                     BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY | BT_GATT_CHRC_INDICATE,
-                    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, read_cb, write_cb, &notify_data),
+                    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, read_led, write_led, &led_status),
 		BT_GATT_CCC(led_ccc_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
+
+static void ess_ccc_cfg_changed(const struct bt_gatt_attr *attr,
+				       uint16_t value)
+{
+	ARG_UNUSED(attr);
+
+	bool notif_enabled = (value == BT_GATT_CCC_NOTIFY);
+	if(notif_enabled)
+	{
+		bt_gatt_notify(NULL, attr, &temp_val, sizeof(temp_val));
+	}
+}
 
 static void led_ccc_cfg_changed(const struct bt_gatt_attr *attr,
 				       uint16_t value)
@@ -84,7 +95,7 @@ static void led_ccc_cfg_changed(const struct bt_gatt_attr *attr,
 	bool notif_enabled = (value == BT_GATT_CCC_NOTIFY);
 	if(notif_enabled)
 	{
-		bt_gatt_notify(NULL, attr, &notify_data, sizeof(notify_data));
+		bt_gatt_notify(NULL, attr, &led_status, sizeof(led_status));
 	}
 
 	printk("Notifications %s\n", notif_enabled ? "enabled" : "disabled");
@@ -108,7 +119,7 @@ static const struct bt_data sd[] = {
 // static struct bt_hrs_client hrs_c;
 static struct bt_conn *central_conn;
 
-static uint8_t notify_func1(struct bt_conn *conn,
+static uint8_t notify_led_status(struct bt_conn *conn,
 			   struct bt_gatt_subscribe_params *params,
 			   const void *data, uint16_t length)
 {
@@ -119,15 +130,15 @@ static uint8_t notify_func1(struct bt_conn *conn,
 	}
 
 	const uint16_t *dtemp = data;
-	notify_data = dtemp[0];
+	led_status = dtemp[0];
 
-	printk("[NOTIFICATION] data %d length %u\n", notify_data, length);
-	bt_gatt_notify(NULL, &(my_custom_led_svc.attrs[1]), &notify_data, sizeof(notify_data));
+	printk("[NOTIFICATION] data %d length %u\n", led_status, length);
+	bt_gatt_notify(NULL, &(my_custom_led_svc.attrs[1]), &led_status, sizeof(led_status));
 
 	return BT_GATT_ITER_CONTINUE;
 }
 
-static uint8_t notify_func(struct bt_conn *conn,
+static uint8_t notify_temp(struct bt_conn *conn,
 			   struct bt_gatt_subscribe_params *params,
 			   const void *data, uint16_t length)
 {
@@ -138,10 +149,10 @@ static uint8_t notify_func(struct bt_conn *conn,
 	}
 
 	const uint16_t *dtemp = data;
-	read_data = dtemp[0];
+	temp_val = dtemp[0];
 
-	printk("---> [NOTIFICATION] data %d length %u\n", read_data, length);
-	bt_gatt_notify(NULL, &(my_ess_svc.attrs[1]), &read_data, sizeof(read_data));
+	printk("[NOTIFICATION] data %d length %u\n", temp_val, length);
+	bt_gatt_notify(NULL, &(my_ess_svc.attrs[1]), &temp_val, sizeof(temp_val));
 
 	return BT_GATT_ITER_CONTINUE;
 }
@@ -155,8 +166,8 @@ static uint8_t read_func(struct bt_conn *conn, uint8_t err,
 	}
 
 	const uint16_t *dtemp = data;
-	read_data = dtemp[0];
-	printk("[READ DATA] %d and %d\n", read_data, params->single.handle);
+	temp_val = dtemp[0];
+	printk("[READ DATA] %d and %d\n", temp_val, params->single.handle);
 
 	return BT_GATT_ITER_CONTINUE;
 
@@ -175,8 +186,8 @@ static void read_temp(struct bt_conn *conn,
 	read_params.by_uuid.uuid = &read_uuid.uuid;
 	rc = bt_gatt_read(central_conn, &read_params);
 	
-	bt_gatt_attr_read(central_conn, attr, buf, len, offset, &read_data,
-				sizeof(read_data));
+	bt_gatt_attr_read(central_conn, attr, buf, len, offset, &temp_val,
+				sizeof(temp_val));
 }
 
 static void write_func(struct bt_conn *conn, uint8_t err,
@@ -185,14 +196,14 @@ static void write_func(struct bt_conn *conn, uint8_t err,
 
 }
 
-static void write_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
+static void write_led(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
 			 uint16_t len, uint16_t offset, uint8_t flags)
 {
 	int err;
 	uint8_t val[len];
 
 	memcpy(val, buf, len);
-	uint16_t handle = bt_gatt_attr_get_handle(bt_gatt_find_by_uuid(NULL, 1, BT_UUID_CUS_LED));
+	uint16_t handle = bt_gatt_attr_get_handle(bt_gatt_find_by_uuid(NULL, 1, CUSTOM_LED_CHAR_UUID));
 
 	write_params.func = write_func;
 	write_params.handle = handle-2;
@@ -211,12 +222,12 @@ static void write_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, cons
 	}
 }
 
-static void read_cb(struct bt_conn *conn,
+static void read_led(struct bt_conn *conn,
 			       const struct bt_gatt_attr *attr, void *buf,
 			       uint16_t len, uint16_t offset)
 {
-	bt_gatt_attr_read(central_conn, attr, buf, len, offset, &notify_data,
-				 sizeof(notify_data));
+	bt_gatt_attr_read(central_conn, attr, buf, len, offset, &led_status,
+				 sizeof(led_status));
 }
 
 static uint8_t discover_func(struct bt_conn *conn,
@@ -231,11 +242,11 @@ static uint8_t discover_func(struct bt_conn *conn,
 		return BT_GATT_ITER_STOP;
 	}
 
-	// printk("[ATTRIBUTE] handle %u\n", attr->handle);
+	printk("[ATTRIBUTE] handle %u\n", attr->handle);
 
 	if (!bt_uuid_cmp(discover_params[0].uuid, BT_UUID_ESS)) {
-		memcpy(&discover_uuid, BT_UUID_TEMPERATURE, sizeof(discover_uuid));
-		discover_params[0].uuid = &discover_uuid.uuid;
+		memcpy(&discover_uuid[0], BT_UUID_TEMPERATURE, sizeof(discover_uuid[0]));
+		discover_params[0].uuid = &discover_uuid[0].uuid;
 		discover_params[0].start_handle = attr->handle + 1;
 		discover_params[0].type = BT_GATT_DISCOVER_CHARACTERISTIC;
 
@@ -245,8 +256,8 @@ static uint8_t discover_func(struct bt_conn *conn,
 		}
 	} else if (!bt_uuid_cmp(discover_params[0].uuid,
 				BT_UUID_TEMPERATURE)) {
-		memcpy(&discover_uuid, BT_UUID_GATT_CCC, sizeof(discover_uuid));
-		discover_params[0].uuid = &discover_uuid.uuid;
+		memcpy(&discover_uuid[0], BT_UUID_GATT_CCC, sizeof(discover_uuid[0]));
+		discover_params[0].uuid = &discover_uuid[0].uuid;
 		discover_params[0].start_handle = attr->handle + 2;
 		discover_params[0].type = BT_GATT_DISCOVER_DESCRIPTOR;
 		subscribe_params[0].value_handle = bt_gatt_attr_value_handle(attr);
@@ -256,7 +267,7 @@ static uint8_t discover_func(struct bt_conn *conn,
 			printk("Discover failed (err %d)\n", err);
 		}
 	} else {
-		subscribe_params[0].notify = notify_func;
+		subscribe_params[0].notify = notify_temp;
 		subscribe_params[0].value = BT_GATT_CCC_NOTIFY;
 		subscribe_params[0].ccc_handle = attr->handle;
 
@@ -287,9 +298,9 @@ static uint8_t discover_func1(struct bt_conn *conn,
 
 	printk("[ATTRIBUTE] handle %u\n", attr->handle);
 
-	if (!bt_uuid_cmp(discover_params[1].uuid, BT_UUID_CUS)) {
-		memcpy(&discover_uuid1, BT_UUID_CUS_LED, sizeof(discover_uuid1));
-		discover_params[1].uuid = &discover_uuid1.uuid;
+	if (!bt_uuid_cmp(discover_params[1].uuid, CUSTOM_SERVICE_UUID)) {
+		memcpy(&discover_uuid[1], CUSTOM_LED_CHAR_UUID, sizeof(discover_uuid[1]));
+		discover_params[1].uuid = &discover_uuid[1].uuid;
 		discover_params[1].start_handle = attr->handle + 1;
 		discover_params[1].type = BT_GATT_DISCOVER_CHARACTERISTIC;
 
@@ -298,9 +309,9 @@ static uint8_t discover_func1(struct bt_conn *conn,
 			printk("Discover failed (err %d)\n", err);
 		}
 	} else if (!bt_uuid_cmp(discover_params[1].uuid,
-				BT_UUID_CUS_LED)) {
-		memcpy(&discover_uuid1, BT_UUID_GATT_CCC, sizeof(discover_uuid1));
-		discover_params[1].uuid = &discover_uuid1.uuid;
+				CUSTOM_LED_CHAR_UUID)) {
+		memcpy(&discover_uuid[1], BT_UUID_GATT_CCC, sizeof(discover_uuid[1]));
+		discover_params[1].uuid = &discover_uuid[1].uuid;
 		discover_params[1].start_handle = attr->handle + 2;
 		discover_params[1].type = BT_GATT_DISCOVER_DESCRIPTOR;
 		subscribe_params[1].value_handle = bt_gatt_attr_value_handle(attr);
@@ -310,7 +321,7 @@ static uint8_t discover_func1(struct bt_conn *conn,
 			printk("Discover failed (err %d)\n", err);
 		}
 	} else {
-		subscribe_params[1].notify = notify_func1;
+		subscribe_params[1].notify = notify_led_status;
 		subscribe_params[1].value = BT_GATT_CCC_NOTIFY;
 		subscribe_params[1].ccc_handle = attr->handle;
 
@@ -330,8 +341,8 @@ static uint8_t discover_func1(struct bt_conn *conn,
 static void gatt_discover(struct bt_conn *conn)
 {
 	int err;
-	memcpy(&discover_uuid, BT_UUID_ESS, sizeof(discover_uuid));
-	discover_params[0].uuid = &discover_uuid.uuid;
+	memcpy(&discover_uuid[0], BT_UUID_ESS, sizeof(discover_uuid[0]));
+	discover_params[0].uuid = &discover_uuid[0].uuid;
 	discover_params[0].func = discover_func;
 	discover_params[0].start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
 	discover_params[0].end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
@@ -343,8 +354,8 @@ static void gatt_discover(struct bt_conn *conn)
 		return;
 	}
 
-	memcpy(&discover_uuid1, BT_UUID_CUS, sizeof(discover_uuid1));
-	discover_params[1].uuid = &discover_uuid1.uuid;
+	memcpy(&discover_uuid[1], CUSTOM_SERVICE_UUID, sizeof(discover_uuid[1]));
+	discover_params[1].uuid = &discover_uuid[1].uuid;
 	discover_params[1].func = discover_func1;
 	discover_params[1].start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
 	discover_params[1].end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
@@ -370,7 +381,7 @@ static int scan_start(void)
 
 static void connected(struct bt_conn *conn, uint8_t conn_err)
 {
-	int err;
+	// int err;
 	struct bt_conn_info info;
 	char addr[BT_ADDR_LE_STR_LEN];
 
@@ -395,13 +406,7 @@ static void connected(struct bt_conn *conn, uint8_t conn_err)
 
 	if (info.role == BT_CONN_ROLE_CENTRAL) {
 		dk_set_led_on(CENTRAL_CON_STATUS_LED);
-
-		// err = bt_conn_set_security(conn, BT_SECURITY_L2);
-		// if (err) {
-		// 	printk("Failed to set security (err %d)\n", err);
-
 			gatt_discover(conn);
-		// }
 	} else {
 		dk_set_led_on(PERIPHERAL_CONN_STATUS_LED);
 	}
@@ -427,29 +432,9 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	}
 }
 
-// static void security_changed(struct bt_conn *conn, bt_security_t level,
-// 			     enum bt_security_err err)
-// {
-// 	char addr[BT_ADDR_LE_STR_LEN];
-
-// 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-// 	if (!err) {
-// 		printk("Security changed: %s level %u\n", addr, level);
-// 	} else {
-// 		printk("Security failed: %s level %u err %d\n", addr, level,
-// 			err);
-// 	}
-
-// 	if (conn == central_conn) {
-// 		gatt_discover(conn);
-// 	}
-// }
-
 BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected = connected,
 	.disconnected = disconnected,
-	// .security_changed = security_changed
 };
 
 static void scan_filter_match(struct bt_scan_device_info *device_info,
@@ -547,6 +532,3 @@ int main(void)
 		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
 	}
 }
-
-// K_THREAD_DEFINE(hrs_notify_thread_id, STACKSIZE, hrs_notify_thread,
-// 		NULL, NULL, NULL, PRIORITY, 0, 0);
