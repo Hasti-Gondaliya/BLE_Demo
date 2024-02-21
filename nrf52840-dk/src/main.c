@@ -17,17 +17,11 @@
 
 #include <zephyr/kernel.h>
 
-#define STACKSIZE 1024
-#define PRIORITY 7
-
 #define RUN_STATUS_LED             DK_LED1
 #define CENTRAL_CON_STATUS_LED	   DK_LED2
 #define PERIPHERAL_CONN_STATUS_LED DK_LED3
 
 #define RUN_LED_BLINK_INTERVAL 1000
-
-#define HRS_QUEUE_SIZE 16
-
 
 #define CUSTOM_SERVICE_UUID_VAL 0x1234 // Custom Service
 #define CUSTOM_LED_CHAR_UUID_VAL 0x5678 // Custom LED Characteristic
@@ -193,7 +187,7 @@ static void read_temp(struct bt_conn *conn,
 static void write_func(struct bt_conn *conn, uint8_t err,
 				     struct bt_gatt_write_params *params)
 {
-
+	// TODO: For next functionalities
 }
 
 static void write_led(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
@@ -381,7 +375,6 @@ static int scan_start(void)
 
 static void connected(struct bt_conn *conn, uint8_t conn_err)
 {
-	// int err;
 	struct bt_conn_info info;
 	char addr[BT_ADDR_LE_STR_LEN];
 
@@ -396,7 +389,6 @@ static void connected(struct bt_conn *conn, uint8_t conn_err)
 
 			scan_start();
 		}
-
 		return;
 	}
 
@@ -532,3 +524,4 @@ int main(void)
 		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
 	}
 }
+
